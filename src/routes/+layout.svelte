@@ -6,8 +6,7 @@
 
     // NOTE: I cannot provide the CSS here. You MUST paste your original CSS.
 
-    let currentUser;
-    let users = [];
+    
     let deferredPrompt;
     let showInstallBanner = false;
     
@@ -57,8 +56,37 @@
     });
 
     /* --- AUTH --- */
-        function handleLogin() {
-        const found = users.find(u => u.username === loginUsername && u.password === btoa(loginPass));
+            // Make functions async
+    async function handleRegister() {
+        if(!regUsername || !regName || !regPass) return alert('Fill all fields');
+        
+        // Use store directly, not local variable
+        const exists = $usersStore.find(u => u.username === regUsername);
+        if(exists) return alert('Username taken');
+        
+        const newUser = {
+            username: regUsername,
+            name: regName,
+            bio: "", theme: "light",
+            password: btoa(regPass),
+            avatar: `https://ui-avatars.com/api/?name=${regName}&background=random`,
+            students: [], pdfs: [],
+            lastOpenDate: new Date().toISOString().split('T')[0]
+        };
+        
+        // AWAIT save to prevent freeze
+        try {
+            await saveUser(newUser);
+            sessionStorage.setItem('lumina_session', newUser.username);
+            applyTheme(newUser.theme);
+        } catch(e) {
+            alert("Error creating account: " + e.message);
+        }
+    }
+
+    async function handleLogin() {
+        // Use store directly
+        const found = $usersStore.find(u => u.username === loginUsername && u.password === btoa(loginPass));
         if(found) {
             sessionStorage.setItem('lumina_session', found.username);
             userStore.set(found);
@@ -66,37 +94,6 @@
         } else {
             alert("Invalid Username or Password");
         }
-    }
-
-        function handleRegister() {
-        if(!regUsername || !regName || !regPass) return alert('Please fill all fields');
-        if(users.find(u => u.username === regUsername)) return alert('Username already taken');
-        
-        const newUser = {
-            username: regUsername,
-            name: regName,
-            bio: "",
-            theme: "light",
-            password: btoa(regPass),
-            avatar: `https://ui-avatars.com/api/?name=${regName}&background=random`,
-            students: [],
-            pdfs: [],
-            lastOpenDate: new Date().toISOString().split('T')[0]
-        };
-        
-        users.push(newUser);
-        
-        // CRITICAL FIX: Add AWAIT and ERROR CATCH
-        saveUser(newUser)
-            .then(() => {
-                userStore.set(newUser);
-                sessionStorage.setItem('lumina_session', newUser.username);
-                applyTheme(newUser.theme);
-            })
-            .catch((err) => {
-                alert("Error saving account: " + err.message);
-                console.error(err);
-            });
     }
 
     function handleLogout() {

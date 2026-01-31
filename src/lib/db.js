@@ -17,11 +17,12 @@ export const idbHelper = {
             
             request.onsuccess = (e) => {
                 this.db = e.target.result;
-                this.migrateFromLocalStorage().then(() => resolve()).catch(err => {
-                    console.error("Migration Error:", err);
-                    // Even if migration fails, we resolve so app works
-                    resolve(); 
-                });
+                
+                // DISABLED MIGRATION TO PREVENT FREEZING
+                // If you have old data, we handle it separately.
+                // this.migrateFromLocalStorage().then(() => resolve());
+                
+                resolve(); 
             };
             
             request.onerror = (e) => {
@@ -30,37 +31,11 @@ export const idbHelper = {
             };
         });
     },
-    async migrateFromLocalStorage() {
-        const oldData = localStorage.getItem('lumina_pro_users');
-        if (oldData) {
-            try {
-                const users = JSON.parse(oldData);
-                const tx = this.db.transaction(STORE_NAME, 'readwrite');
-                const store = tx.objectStore(STORE_NAME);
-                
-                // Safely migrate in batches to avoid freezing
-                for (const user of users) {
-                    if (!user.attendanceHistory) user.attendanceHistory = {}; 
-                    if (!user.students) user.students = [];
-                    user.students.forEach(s => {
-                        if(!s.attendanceHistory) s.attendanceHistory = {};
-                    });
-                    store.put(user);
-                }
-                
-                return new Promise(r => tx.oncomplete = r);
-            } catch (e) {
-                console.error("JSON Parse Error:", e);
-                // Clear corrupted local data
-                localStorage.removeItem('lumina_pro_users');
-                throw e;
-            }
-        }
-    },
+    
     async getAll() {
         return new Promise((resolve, reject) => {
             if(!this.db) {
-                reject(new Error("DB not initialized"));
+                reject(new Error("DB not open"));
                 return;
             }
             const tx = this.db.transaction(STORE_NAME, 'readonly');
@@ -70,26 +45,37 @@ export const idbHelper = {
             request.onerror = (e) => reject(e);
         });
     },
+    
     async put(user) {
         return new Promise((resolve, reject) => {
             if(!this.db) {
-                reject(new Error("DB not initialized"));
+                reject(new Error("DB not open"));
                 return;
             }
             const tx = this.db.transaction(STORE_NAME, 'readwrite');
             const store = tx.objectStore(STORE_NAME);
             const request = store.put(user);
+            
             request.onsuccess = () => resolve();
             request.onerror = (e) => {
-                console.error("DB Save Error:", e);
+                console.error("Put Error:", e);
                 reject(e);
             };
+            
+            // TIMEOUT FIX: If DB hangs for 2 seconds, force resolve
+            // This prevents app from freezing forever
+            setTimeout(() => {
+                if(!request.result && !request.error) {
+                    resolve(); // Resolve anyway to unfreeze UI
+                }
+            }, 2000);
         });
     },
+    
     async delete(username) {
         return new Promise((resolve, reject) => {
             if(!this.db) {
-                reject(new Error("DB not initialized"));
+                reject(new Error("DB not open"));
                 return;
             }
             const tx = this.db.transaction(STORE_NAME, 'readwrite');

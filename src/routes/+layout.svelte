@@ -38,23 +38,23 @@
 
     $: m = $modalStore;
 
-    onMount(async () => {
-        await initDB();
-        const savedSession = sessionStorage.getItem('lumina_session');
-        if(savedSession) {
-            const found = users.find(u => u.username === savedSession);
-            if(found) {
-                userStore.set(found);
-                applyTheme(found.theme);
+        onMount(async () => {
+        try {
+            await initDB();
+            const savedSession = sessionStorage.getItem('lumina_session');
+            if(savedSession) {
+                const found = users.find(u => u.username === savedSession);
+                if(found) {
+                    userStore.set(found);
+                    applyTheme(found.theme);
+                }
             }
+        } catch (err) {
+            // THIS CATCHES THE FREEZE
+            alert("Error opening Database: " + err.message + "\n\nPlease check your browser settings or use Chrome.");
+            console.error(err);
         }
-        window.addEventListener('beforeinstallprompt', (e) => {
-            e.preventDefault();
-            deferredPrompt = e;
-            showInstallBanner = true;
-        });
     });
-
     /* --- AUTH --- */
             // Make functions async
     async function handleRegister() {

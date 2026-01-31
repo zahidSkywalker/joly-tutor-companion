@@ -57,33 +57,46 @@
     });
 
     /* --- AUTH --- */
-    function handleLogin() {
+        function handleLogin() {
         const found = users.find(u => u.username === loginUsername && u.password === btoa(loginPass));
         if(found) {
             sessionStorage.setItem('lumina_session', found.username);
             userStore.set(found);
             applyTheme(found.theme);
         } else {
-            alert('Invalid credentials');
+            alert("Invalid Username or Password");
         }
     }
 
-    function handleRegister() {
-        if(!regUsername || !regName || !regPass) return alert('Fill all');
-        if(users.find(u => u.username === regUsername)) return alert('User taken');
+        function handleRegister() {
+        if(!regUsername || !regName || !regPass) return alert('Please fill all fields');
+        if(users.find(u => u.username === regUsername)) return alert('Username already taken');
         
         const newUser = {
             username: regUsername,
             name: regName,
-            bio: "", theme: "light",
+            bio: "",
+            theme: "light",
             password: btoa(regPass),
             avatar: `https://ui-avatars.com/api/?name=${regName}&background=random`,
-            students: [], pdfs: [],
+            students: [],
+            pdfs: [],
             lastOpenDate: new Date().toISOString().split('T')[0]
         };
+        
         users.push(newUser);
-        saveUser(newUser);
-        userStore.set(newUser);
+        
+        // CRITICAL FIX: Add AWAIT and ERROR CATCH
+        saveUser(newUser)
+            .then(() => {
+                userStore.set(newUser);
+                sessionStorage.setItem('lumina_session', newUser.username);
+                applyTheme(newUser.theme);
+            })
+            .catch((err) => {
+                alert("Error saving account: " + err.message);
+                console.error(err);
+            });
     }
 
     function handleLogout() {

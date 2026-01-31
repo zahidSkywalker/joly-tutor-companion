@@ -4,9 +4,15 @@ const STORE_NAME = 'users';
 
 export const idbHelper = {
     db: null,
+    
     async open() {
         return new Promise((resolve, reject) => {
             const request = indexedDB.open(DB_NAME, DB_VERSION);
+            
+            // TIMEOUT FIX: If DB doesn't open in 2 seconds, reject it (stops freeze)
+            const timeoutId = setTimeout(() => {
+                reject(new Error("Database Timeout: Check your browser settings or disable Private Mode."));
+            }, 2000);
             
             request.onupgradeneeded = (e) => {
                 this.db = e.target.result;
@@ -16,17 +22,13 @@ export const idbHelper = {
             };
             
             request.onsuccess = (e) => {
+                clearTimeout(timeoutId); // Clear timeout on success
                 this.db = e.target.result;
-                
-                // DISABLED MIGRATION TO PREVENT FREEZING
-                // If you have old data, we handle it separately.
-                // this.migrateFromLocalStorage().then(() => resolve());
-                
-                resolve(); 
+                resolve(); // Resolve immediately, don't run migration logic
             };
             
             request.onerror = (e) => {
-                console.error("DB Error:", e);
+                clearTimeout(timeoutId);
                 reject(e);
             };
         });
@@ -34,10 +36,7 @@ export const idbHelper = {
     
     async getAll() {
         return new Promise((resolve, reject) => {
-            if(!this.db) {
-                reject(new Error("DB not open"));
-                return;
-            }
+            if(!this.db) return reject(new Error("DB not open"));
             const tx = this.db.transaction(STORE_NAME, 'readonly');
             const store = tx.objectStore(STORE_NAME);
             const request = store.getAll();
@@ -48,36 +47,19 @@ export const idbHelper = {
     
     async put(user) {
         return new Promise((resolve, reject) => {
-            if(!this.db) {
-                reject(new Error("DB not open"));
-                return;
-            }
+            if(!this.db) return reject(new Error("DB not open"));
             const tx = this.db.transaction(STORE_NAME, 'readwrite');
             const store = tx.objectStore(STORE_NAME);
             const request = store.put(user);
             
             request.onsuccess = () => resolve();
-            request.onerror = (e) => {
-                console.error("Put Error:", e);
-                reject(e);
-            };
-            
-            // TIMEOUT FIX: If DB hangs for 2 seconds, force resolve
-            // This prevents app from freezing forever
-            setTimeout(() => {
-                if(!request.result && !request.error) {
-                    resolve(); // Resolve anyway to unfreeze UI
-                }
-            }, 2000);
+            request.onerror = (e) => reject(e);
         });
     },
     
     async delete(username) {
         return new Promise((resolve, reject) => {
-            if(!this.db) {
-                reject(new Error("DB not open"));
-                return;
-            }
+            if(!this.db) return reject(new Error("DB not open"));
             const tx = this.db.transaction(STORE_NAME, 'readwrite');
             const store = tx.objectStore(STORE_NAME);
             const request = store.delete(username);

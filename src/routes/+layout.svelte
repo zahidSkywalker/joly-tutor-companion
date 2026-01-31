@@ -1,36 +1,54 @@
 <script>
-    import { onMount, onDestroy } from 'svelte';
+    import { onMount } from 'svelte';
     import { page } from '$app/stores';
-    import { userStore, themeStore, saveUser } from '$lib/stores';
+    import { userStore, usersStore, initDB, saveUser, checkDue, compressImage, modalStore, viewingStudentStore } from '$lib/stores';
     import '../app.css';
 
-    let currentUser;
-    let activeTab = 'dashboard'; // 'dashboard', 'students', 'library', 'analytics', 'profile'
+    // NOTE: I cannot provide the CSS here. You MUST paste your original CSS.
 
-    // Modals
-    let showModalAdd = false;
-    let showModalSettings = false;
-    let showModalProfile = false;
-    let viewingStudentIndex = -1;
-    
-    // Install Banner
+    let currentUser;
+    let users = [];
     let deferredPrompt;
     let showInstallBanner = false;
+    
+    // Modal States (Now coming from Store)
+    let showSignup = false;
+
+    // Smart Note State
+    let canvas, ctx;
+    let isDrawing = false;
+    let brushColor = '#ef4444';
+    let noteMode = 'image'; 
+    let smartNoteImgData = null;
+    let noteTitle, noteSubject, noteDate, textNoteTitle, textNoteSubject, textNoteBody, textNoteDate;
+
+    // Add Student Form State
+    let mName, mRoll, mGpa, mFee, mDate, mPhone, mAddress, mImage;
+    
+    // Settings Form State
+    let setBio, setName, setTheme, setAvatar;
+    
+    // Login State
+    let loginUsername, loginPass, regUsername, regName, regPass;
+
+    // Subscriptions
+    $: currentUser = $userStore;
+    $: users = $usersStore;
+    $: activeTab = $page.url.pathname.replace('/', '') || 'dashboard';
+    if(activeTab === '') activeTab = 'dashboard';
+
+    $: m = $modalStore;
 
     onMount(async () => {
-        // Check Session
-        const savedUser = sessionStorage.getItem('lumina_session');
-        if(savedUser) {
-            // Load user from DB logic would go here, simplified for example:
-            // userStore.set(foundUser);
+        await initDB();
+        const savedSession = sessionStorage.getItem('lumina_session');
+        if(savedSession) {
+            const found = users.find(u => u.username === savedSession);
+            if(found) {
+                userStore.set(found);
+                applyTheme(found.theme);
+            }
         }
-        
-        // Theme
-        themeStore.subscribe(val => {
-            document.body.setAttribute('data-theme', val);
-        });
-
-        // Install Prompt
         window.addEventListener('beforeinstallprompt', (e) => {
             e.preventDefault();
             deferredPrompt = e;
@@ -38,85 +56,246 @@
         });
     });
 
-    function handleInstall() {
-        showInstallBanner = false;
-        deferredPrompt.prompt();
-        deferredPrompt.userChoice.then((choiceResult) => {
-            deferredPrompt = null;
-        });
+    /* --- AUTH --- */
+    function handleLogin() {
+        const found = users.find(u => u.username === loginUsername && u.password === btoa(loginPass));
+        if(found) {
+            sessionStorage.setItem('lumina_session', found.username);
+            userStore.set(found);
+            applyTheme(found.theme);
+        } else {
+            alert('Invalid credentials');
+        }
     }
 
-    $: currentUser = $userStore;
-    $: activeTab = $page.url.pathname.replace('/', '') || 'dashboard';
-    if(activeTab === '') activeTab = 'dashboard';
+    function handleRegister() {
+        if(!regUsername || !regName || !regPass) return alert('Fill all');
+        if(users.find(u => u.username === regUsername)) return alert('User taken');
+        
+        const newUser = {
+            username: regUsername,
+            name: regName,
+            bio: "", theme: "light",
+            password: btoa(regPass),
+            avatar: `https://ui-avatars.com/api/?name=${regName}&background=random`,
+            students: [], pdfs: [],
+            lastOpenDate: new Date().toISOString().split('T')[0]
+        };
+        users.push(newUser);
+        saveUser(newUser);
+        userStore.set(newUser);
+    }
+
+    function handleLogout() {
+        sessionStorage.removeItem('lumina_session');
+        userStore.set(null);
+    }
+
+    /* --- ACTIONS --- */
+    async function saveStudent() {
+        if(!mName || !mRoll) return alert('Fill Name/Roll');
+        const process = async (imgBlob) => {
+            const s = { 
+                name: mName, roll: mRoll, gpa: mGpa, fee: mFee, 
+                lastPay: mDate, phone: mPhone, address: mAddress, 
+                image: imgBlob, attendanceHistory: {} 
+            };
+            const newStudents = [...(currentUser.students || []), s];
+            currentUser.students = newStudents;
+            await saveUser(currentUser);
+            modalStore.update(val => ({ ...val, add: false }));
+        };
+
+        if(mImage && mImage.files[0]) {
+            compressImage(mImage.files[0], blob => process(blob));
+        } else {
+            process(null);
+        }
+    }
+
+    async function saveSettings() {
+        currentUser.name = setName;
+        currentUser.bio = setBio;
+        currentUser.theme = setTheme;
+        if(setAvatar && setAvatar.files[0]) {
+            compressImage(setAvatar.files[0], async (blob) => {
+                currentUser.avatar = URL.createObjectURL(blob);
+                await saveUser(currentUser);
+            });
+        } else {
+            await saveUser(currentUser);
+        }
+        applyTheme(setTheme);
+        modalStore.update(val => ({ ...val, settings: false }));
+    }
+
+    function applyTheme(theme) {
+        document.body.setAttribute('data-theme', theme);
+    }
+
+    /* --- CANVAS --- */
+    function resizeCanvas() {
+        if(canvas && canvas.parentElement) {
+            canvas.width = canvas.parentElement.offsetWidth;
+            canvas.height = canvas.parentElement.offsetHeight;
+        }
+    }
+    
+    // Trigger resize when modal opens
+    $: if(m.note) { setTimeout(resizeCanvas, 100); }
+
+    function startDraw(e) { isDrawing = true; draw(e); }
+    function stopDraw() { isDrawing = false; ctx.beginPath(); }
+    function draw(e) {
+        if(!isDrawing) return;
+        e.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+        const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = brushColor;
+        ctx.lineTo(x, y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+    }
+
+    async function saveSmartNote() {
+        const title = noteMode === 'image' ? noteTitle : textNoteTitle;
+        const subject = noteMode === 'image' ? noteSubject : textNoteSubject;
+        
+        let content = {};
+        if(noteMode === 'image') {
+             content = { type: 'image', data: smartNoteImgData };
+        } else {
+             content = { type: 'text', data: textNoteBody };
+        }
+        currentUser.pdfs = currentUser.pdfs || [];
+        currentUser.pdfs.push({ name: title, subject, content, date: new Date().toISOString().split('T')[0], id: Date.now() });
+        await saveUser(currentUser);
+        modalStore.update(val => ({ ...val, note: false }));
+    }
 </script>
 
-<!-- INSTALL BANNER -->
-{#if showInstallBanner}
-<div id="install-banner" class="visible">
-    <div>Install Joly's Tutor Companion</div>
-    <div>
-        <button on:click={handleInstall}>Install</button>
-        <button on:click={() => showInstallBanner = false} style="background:none;border:none;color:white;margin-left:10px;"><i class="fa-solid fa-xmark"></i></button>
+{#if !currentUser}
+<!-- AUTH SCREEN -->
+<div id="auth-container">
+    <div class="auth-card slide-up">
+        <h1>Joly's Tutor</h1>
+        {#if !showSignup}
+            <input class="auth-input" bind:value={loginUsername} placeholder="Username">
+            <input class="auth-input" type="password" bind:value={loginPass} placeholder="Password">
+            <button class="auth-btn" on:click={handleLogin}>Sign In</button>
+            <div class="auth-toggle">New? <span on:click={() => showSignup = true}>Create Account</span></div>
+        {:else}
+            <input class="auth-input" bind:value={regUsername} placeholder="Username">
+            <input class="auth-input" bind:value={regName} placeholder="Name">
+            <input class="auth-input" type="password" bind:value={regPass} placeholder="Password">
+            <button class="auth-btn" on:click={handleRegister}>Create</button>
+            <div class="auth-toggle">Have account? <span on:click={() => showSignup = false}>Sign In</span></div>
+        {/if}
     </div>
 </div>
-{/if}
+{:else}
+<!-- MAIN APP -->
+    {#if showInstallBanner}
+        <div id="install-banner" class="visible">
+            <div>Install App</div>
+            <button on:click={() => {
+                showInstallBanner = false;
+                deferredPrompt.prompt();
+                deferredPrompt.userChoice.then(() => deferredPrompt = null);
+            }}>Install</button>
+        </div>
+    {/if}
 
-<!-- LAYOUT STRUCTURE -->
-{#if currentUser}
     <header>
-        <div class="header-title" id="dynamic-header-title">Joly's Companion</div>
-        <div class="avatar-wrapper" style="width:40px; height:40px;">
-            <img src={currentUser.avatar} style="width:100%; height:100%; border-radius:50%; object-fit:cover;">
+        <div class="header-title">Joly's Companion</div>
+        <div class="avatar-wrapper" style="width:40px;height:40px;">
+            <img src={currentUser.avatar} style="width:100%;height:100%;border-radius:50%;object-fit:cover;">
         </div>
     </header>
 
     <div class="app-content">
-        <slot /> <!-- PAGE CONTENT GOES HERE -->
+        <slot />
     </div>
 
-    <button class="fab" class:hidden={activeTab !== 'students'} on:click={() => showModalAdd = true}><i class="fa-solid fa-plus"></i></button>
+    <button class="fab" class:hidden={activeTab !== 'students'} on:click={() => modalStore.update(x => ({...x, add: true}))}><i class="fa-solid fa-plus"></i></button>
 
     <nav class="nav-bar">
-        <button class:active={activeTab === 'dashboard'} class="nav-btn" on:click={() => activeTab = 'dashboard'}>
-            <i class="fa-solid fa-house"></i> <span>Home</span>
-        </button>
-        <button class:active={activeTab === 'students'} class="nav-btn" on:click={() => activeTab = 'students'}>
-            <i class="fa-solid fa-users"></i> <span>Students</span>
-        </button>
-        <button class:active={activeTab === 'library'} class="nav-btn" on:click={() => activeTab = 'library'}>
-            <i class="fa-solid fa-book-open"></i> <span>Library</span>
-        </button>
-        <button class:active={activeTab === 'analytics'} class="nav-btn" on:click={() => activeTab = 'analytics'}>
-            <i class="fa-solid fa-chart-pie"></i> <span>Stats</span>
-        </button>
-        <button class:active={activeTab === 'profile'} class="nav-btn" on:click={() => activeTab = 'profile'}>
-            <i class="fa-solid fa-user"></i> <span>Profile</span>
-        </button>
+        <button class:active={activeTab === 'dashboard'} class="nav-btn" href="/"><i class="fa-solid fa-house"></i> Home</button>
+        <button class:active={activeTab === 'students'} class="nav-btn" href="/students"><i class="fa-solid fa-users"></i> Students</button>
+        <button class:active={activeTab === 'library'} class="nav-btn" href="/library"><i class="fa-solid fa-book-open"></i> Library</button>
+        <button class:active={activeTab === 'analytics'} class="nav-btn" href="/analytics"><i class="fa-solid fa-chart-pie"></i> Stats</button>
+        <button class:active={activeTab === 'profile'} class="nav-btn" href="/profile"><i class="fa-solid fa-user"></i> Profile</button>
     </nav>
-{:else}
-    <!-- AUTH SCREEN GOES HERE (Simplifed for brevity, or create /auth route) -->
-    <div class="auth-card slide-up">
-        <h1>Joly's Tutor</h1>
-        <input class="auth-input" placeholder="Username" id="login-user">
-        <input class="auth-input" placeholder="Password" id="login-pass">
-        <button class="auth-btn">Sign In</button>
-    </div>
-{/if}
 
-<!-- MODAL: ADD STUDENT (Simplified logic) -->
-{#if showModalAdd}
-    <div class="modal-overlay open">
-        <div class="modal-content">
-            <h3>Add New Student</h3>
-            <input class="form-input" placeholder="Full Name">
-            <input class="form-input" placeholder="Roll Number">
-            <button class="auth-btn" on:click={() => showModalAdd = false}>Cancel</button>
-            <button class="auth-btn">Save</button>
+    <!-- MODAL: ADD STUDENT -->
+    {#if m.add}
+        <div class="modal-overlay open" on:click={() => modalStore.update(x => ({...x, add: false}))}>
+            <div class="modal-content" on:click|stopPropagation>
+                <h3>Add New Student</h3>
+                <input class="form-input" bind:value={mName} placeholder="Full Name">
+                <input class="form-input" bind:value={mRoll} placeholder="Roll Number">
+                <input class="form-input" bind:value={mGpa} type="number" placeholder="GPA">
+                <input class="form-input" bind:value={mFee} type="number" placeholder="Fee">
+                <input class="form-input" bind:value={mPhone} placeholder="Phone">
+                <input class="form-input" bind:value={mAddress} placeholder="Address">
+                <input class="form-input" bind:value={mDate} type="date">
+                <label class="form-label">Photo</label>
+                <input class="form-input" type="file" bind:files={mImage.files}>
+                <button class="auth-btn" on:click={saveStudent}>Save</button>
+            </div>
         </div>
-    </div>
-{/if}
+    {/if}
 
-<style>
-    /* Additional Layout specific styles if needed */
-</style>
+    <!-- MODAL: SETTINGS -->
+    {#if m.settings}
+        <div class="modal-overlay open" on:click={() => modalStore.update(x => ({...x, settings: false}))}>
+            <div class="modal-content" on:click|stopPropagation>
+                <h3>Settings</h3>
+                <input class="form-input" bind:value={setName} placeholder="Full Name">
+                <input class="form-input" bind:value={setBio} placeholder="Bio">
+                <select class="form-select" bind:value={setTheme}>
+                    <option value="light">Light</option>
+                    <option value="dark">Dark</option>
+                    <option value="midnight">Midnight</option>
+                </select>
+                <label class="form-label">Avatar</label>
+                <input class="form-input" type="file" bind:files={setAvatar.files}>
+                <button class="auth-btn" on:click={saveSettings}>Save</button>
+            </div>
+        </div>
+    {/if}
+
+    <!-- MODAL: SMART NOTE -->
+    {#if m.note}
+        <div class="modal-overlay open" on:click={() => modalStore.update(x => ({...x, note: false}))}>
+            <div class="modal-content" on:click|stopPropagation use:resizeCanvas>
+                <h3>Smart Note</h3>
+                <div class="note-mode-tabs">
+                    <button class:active={noteMode === 'image'} on:click={() => noteMode='image'}>Photo</button>
+                    <button class:active={noteMode === 'text'} on:click={() => noteMode='text'}>Text</button>
+                </div>
+                {#if noteMode === 'image'}
+                    <input class="form-input" type="file" on:change={(e) => {
+                        compressImage(e.target.files[0], blob => { smartNoteImgData = blob; });
+                    }} accept="image/*">
+                    <div class="canvas-wrapper">
+                        <img src={smartNoteImgData ? URL.createObjectURL(smartNoteImgData) : ''} class="hidden">
+                        <canvas bind:this={canvas} on:mousedown={startDraw} on:mouseup={stopDraw} on:mousemove={draw} 
+                            on:touchstart={startDraw} on:touchend={stopDraw} on:touchmove={draw}></canvas>
+                    </div>
+                    <input class="form-input" bind:value={noteTitle} placeholder="Title">
+                    <input class="form-input" bind:value={noteDate} type="date">
+                    <button class="auth-btn" on:click={saveSmartNote}>Save Note</button>
+                {:else}
+                    <input class="form-input" bind:value={textNoteTitle} placeholder="Title">
+                    <textarea class="form-textarea" bind:value={textNoteBody}></textarea>
+                    <button class="auth-btn" on:click={saveSmartNote}>Save Text Note</button>
+                {/if}
+            </div>
+        </div>
+    {/if}
+{/if}

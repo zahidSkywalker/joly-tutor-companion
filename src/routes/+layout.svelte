@@ -268,7 +268,23 @@
             </div>
         </div>
     {/if}
-
+<!-- MODAL: PARENT QR CODE -->
+{#if m.qr}
+    <div class="modal-overlay open" on:click={() => modalStore.update(x => ({...x, qr: false}))}>
+        <div class="modal-content" style="text-align: center;" on:click|stopPropagation>
+            <h3>Parent Report Card</h3>
+            <p style="color: var(--text-muted); font-size: 0.9rem;">Scan or Share</p>
+            
+            <div class="qr-card-content">
+                <div id="qrcode"></div>
+                <h2 style="margin:0; font-size:1.4rem;">{currentUser?.name}</h2>
+                <div style="font-size:0.9rem; color:#64748b; margin-top:5px;">Tutor: {currentUser?.username}</div>
+            </div>
+            
+            <button class="auth-btn" style="background: #10b981; margin-top:1.5rem;" onclick="window.print()">Print Card</button>
+        </div>
+    </div>
+{/if}
     <!-- MODAL: SMART NOTE -->
     {#if m.note}
         <div class="modal-overlay open" on:click={() => modalStore.update(x => ({...x, note: false}))}>
